@@ -1,39 +1,42 @@
 /* Irrigation Control System with 5 valves
  partially based on the Arduino NTP sample code and the Arduino Telnet sample code
 */
+
 #include <Time.h> 
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <SPI.h>
 #include <avr/wdt.h>
 
-char ssid[] = "";  //  your network SSID (name)
-char pass[] = "";       // your network password
-const int c_no_of_valves = 5; // number of valves. If you change this number, make sure to also change the variables sw and pins accordingly
+char ssid[] = "";         //  your network SSID (name)
+char pass[] = ""; // your network password
+const int c_no_of_valves = 5;  // number of valves; if this number is changed, the variables sw and pins have to be changed accordingly
 int sw[5] = {0,0,0,0,0};
-int pins[5] = {2, 3, 5, 6, 8};
+int pins[5] = {2, 3, 5, 6, 8}; // the Arduino PINS that will be used to switch the valves/releais
 
 #define MAX_CMD_LENGTH   30
 
 int status = WL_IDLE_STATUS;
 
-// NTP Servers:
-IPAddress timeServer(129, 6, 15, 28); // time.nist.gov NTP server
+IPAddress timeServer(129, 6, 15, 28); // time.nist.gov NTP server set another NTP server here
 
-const int timeZone = 2;     // Central European Time
+const int timeZone = 2;     // Central European Time; time adjustment over UTC
 
 WiFiUDP Udp;
 WiFiServer server = WiFiServer(23);
 
 unsigned int localPort = 8888;  // local port to listen for UDP packets
 
-String cmds[10]; // this contains the switch commands. Not the most elegant way, but it's on the list of things to change.
-String logstr;
+byte cmd_valve[10]; // the valve that should be switched on/off
+byte cmd_weekday[10]; // the weekdays on which the valve should be turned on
+time_t cmd_timeOn[10]; // time when the valve should go on
+time_t cmd_timeOff[10];  // time when the valve should not be turned on anymore
 
 WiFiClient client;
 boolean connected = false;
 int lastconnected = 0;
-String cmd;
+String cmd = String();
+
 byte tncommand = 0;
 
 void setup() 
@@ -41,13 +44,6 @@ void setup()
   wdt_disable();  // disable the watchdog immediately in setup. Otherwise we end up in an endless re-boot loop.
   Serial.begin(9600);
   
-  // check for the presence of the WiFi shield:
-  if (WiFi.status() == WL_NO_SHIELD) {
-    // don't continue:
-    while(true);
-  } 
-
-
   // attempt to connect to Wifi network:
   while ( status != WL_CONNECTED) { 
     status = WiFi.begin(ssid, pass);
@@ -63,19 +59,13 @@ void setup()
     pinMode(pins[i], OUTPUT);
   }
   
-// set the initial command strings
-// the format is switch, seven days of week, start time HH:MM, end time HH:MM
+  for (int i=0;i<10;i++) {
+    cmd_valve[i] = 0;
+    cmd_weekday[i] = B0000000;
+    cmd_timeOn[i] = 0;
+    cmd_timeOff[i] = 0;
+  }
 
-  cmds[0] = "0:0000000:00:00:00:00";
-  cmds[1] = "0:0000011:21:00:21:15";
-  cmds[2] = "1:0000011:21:15:21:30";
-  cmds[3] = "2:0000011:21:30:21:45";
-  cmds[4] = "3:0000011:21:45:22:05";
-  cmds[5] = "4:0000011:22:05:22:25";
-  cmds[6] = "0:0000000:00:00:00:00";
-  cmds[7] = "0:0000000:00:00:00:00";
-  cmds[8] = "0:0000000:00:00:00:00";
-  cmds[9] = "0:0000000:00:00:00:00";
   server.begin();
   
   wdt_enable(WDTO_8S); // turn on the watchdog function and set to 8s. Setting it much lower runs the risk of an endless loop.
@@ -84,6 +74,12 @@ void setup()
 
 void loop()
 {  
+  if (WiFi.status() != WL_CONNECTED) {
+    while(true); // go into an endless loop when WIFI is not connected, this should reset the Arduino through the watchdog
+  }
+  if (server.status() == 0) {
+    while (true);
+  }
   
   wdt_reset(); // reset the watchdog, sketch is still alive
   
@@ -91,17 +87,13 @@ void loop()
   int wd;
   
   if (timeStatus() != timeNotSet) {
-    // now loop through the controld strings and set the output switches
+    // now loop through the control strings and set the output switches
     // first set all to off
     for (int i=0; i<c_no_of_valves ; i++) {
       sw[i] = 0;
     }
   
     int t_sw;
-    int t_hourfrom;
-    int t_hourto;
-    int t_minutefrom;
-    int t_minuteto;
     int t_weekday;
     
     t_dayminutes = hour()*60+minute();
@@ -111,16 +103,11 @@ void loop()
     int t_checkdmto;
     
     for (int i=0; i<10 ; i++) {
-      if (cmds[i].charAt(1+wd) == '1') {
-          t_sw = cmds[i].charAt(0)-48;
+      if (bitRead(cmd_weekday[i], wd) == 1) {
+          t_sw = cmd_valve[i];
           
-          t_hourfrom = (cmds[i].charAt(10)-48) * 10 + cmds[i].charAt(11)-48;
-          t_minutefrom = (cmds[i].charAt(13)-48) * 10 + cmds[i].charAt(14)-48;
-          t_hourto = (cmds[i].charAt(16)-48) * 10 + cmds[i].charAt(17)-48;
-          t_minuteto = (cmds[i].charAt(19)-48) * 10 + cmds[i].charAt(20)-48;
-          
-          t_checkdmfrom = t_hourfrom*60+t_minutefrom;
-          t_checkdmto = t_hourto*60+t_minuteto;
+          t_checkdmfrom = hour(cmd_timeOn[i])*60+minute(cmd_timeOn[i]);
+          t_checkdmto = hour(cmd_timeOff[i])*60+minute(cmd_timeOff[i]);
           
           // now check if this one should be turned on
           if ((t_dayminutes>=t_checkdmfrom) and (t_dayminutes<=t_checkdmto)) {
@@ -161,7 +148,7 @@ void loop()
       readTelnetCommand(client.read());
     }
   }
-  if (connected and ((t_dayminutes-lastconnected)>2)) {
+  if (connected and ((t_dayminutes-lastconnected)>5)) {
     client.println("timeout. bye.");
     client.stop();
     connected = false;
@@ -178,8 +165,8 @@ time_t getNtpTime()
 {
   while (Udp.parsePacket() > 0) ; // discard any previously received packets
   sendNTPpacket(timeServer);
-  uint32_t beginWait = millis();
-  while (millis() - beginWait < 1500) {
+  uint32_t beginWait = millis(); // this won't handle overflows correctly?
+  while (millis() - beginWait < 1500) {    
     int size = Udp.parsePacket();
     if (size >= NTP_PACKET_SIZE) {
       Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
@@ -264,16 +251,29 @@ void parseCommand() {
       server.println("set    : set X A:1234567:HH:MM:HH:MM");
       server.println("reset  : set all to 0");
       server.println("exit   : close the connection");
+      server.println("ls     : list all");
       server.println("on     : on X");
   }
   if(cmd.startsWith("set")) {
      if (cmd.length()==27) {
-        char t_c = cmd.charAt(4);
-        if (t_c>='0' and t_c<='9') {
-          cmds[t_c-48] = cmd.substring(6,27);
-          server.print(t_c);
-          server.print(" has been changed to ");
-          server.println(cmd.substring(6,27)); 
+        char t_c = cmd.charAt(4); // the position/index to be written to
+        if (t_c>='0' and t_c<='9') { // just make sure it is within boundaries
+           cmd_valve[t_c-48] = cmd.charAt(6)-48;          
+           for (int j=1;j<8;j++) {
+             bitWrite(cmd_weekday[t_c-48], j, cmd.charAt(15-j)-48);
+           }
+           TimeElements tm;
+           tm.Second = 0;
+           tm.Hour = ((cmd.charAt(16)-48)*10)+(cmd.charAt(17)-48);
+           tm.Minute = ((cmd.charAt(19)-48)*10)+(cmd.charAt(20)-48);
+           tm.Day = 1;
+           tm.Month = 1;
+           tm.Year = 0;
+           cmd_timeOn[t_c-48] = makeTime(tm);
+           tm.Hour = ((cmd.charAt(22)-48)*10)+(cmd.charAt(23)-48);
+           tm.Minute = ((cmd.charAt(25)-48)*10)+(cmd.charAt(26)-48);
+           cmd_timeOff[t_c-48] = makeTime(tm);
+           server.println("Data has been set.");
         }
      }
      else
@@ -286,7 +286,19 @@ void parseCommand() {
      if (cmd.length()==5) {
         char t_c = cmd.charAt(4);
         if (t_c>='0' and t_c<='9') {
-          server.println(cmds[t_c-48]);
+          server.println(server.status());
+          server.print("Valve:");
+          server.println(cmd_valve[t_c-48]);
+          server.print("Weekday:");
+          server.println(cmd_weekday[t_c-48], BIN);
+          server.print("Time On:");
+          server.print(hour(cmd_timeOn[t_c-48]));
+          server.print(":");
+          server.println(minute(cmd_timeOn[t_c-48]));
+          server.print("Time Off:");
+          server.print(hour(cmd_timeOff[t_c-48]));
+          server.print(":");
+          server.println(minute(cmd_timeOff[t_c-48]));
         }
      }
      else
@@ -299,10 +311,12 @@ void parseCommand() {
      if (cmd.length()==4) {
         char t_c = cmd.charAt(3);
         if (t_c>='0' and t_c<='9') {
-          cmds[0] = "0:1111111:00:00:24:00";
-          cmds[0][0] = t_c;
+          cmd_valve[0] = t_c-48;
+          cmd_weekday[0] = B1111111;
+          cmd_timeOn[0] = now();
+          cmd_timeOff[0] = now()+(15*60); // 15 minutes
           server.print(t_c);
-          server.println(" turned on");
+          server.println(" turned on for 15 minutes");
         }
      }
      else
@@ -313,28 +327,49 @@ void parseCommand() {
    
    if(cmd.equals("reset")) {
       for (int i=0; i<10; i++) {
-        cmds[i] = "0:0000000:00:00:00:00";
+        cmd_valve[i] = 0;
+        cmd_weekday[i] = B0000000;
+        cmd_timeOn[i] = 0;
+        cmd_timeOff[i] = 0;
       }
       server.println("All cmds set to 0");
       
   }
   
   if (cmd.equals("time")) {
-      server.print("Current Time:");
+      server.print("Time:");
       server.print(hour());
       server.print(":");
       server.print(minute());
       server.print(":");
       server.println(second());
+      server.print("Date:");
       server.print(day());
       server.print(".");
       server.print(month());
       server.print(".");
       server.println(year());
-      server.print("weekday:");
+      server.print("Weekday:");
       server.println(weekday());
   }
   
+  if (cmd.equals("ls")) {
+    for (int i=0;i<10;i++) {
+      server.print(cmd_valve[i]);
+      server.print(":");
+      for (int j=1;j<8;j++) {
+        server.print(bitRead(cmd_weekday[i],j));
+      }
+      server.print(":");
+      server.print(hour(cmd_timeOn[i]));
+      server.print(":");
+      server.print(minute(cmd_timeOn[i]));
+      server.print(":");
+      server.print(hour(cmd_timeOff[i]));
+      server.print(":");
+      server.println(minute(cmd_timeOff[i]));
+    }
+  }
   cmd = "";
   server.print(">");
 }
