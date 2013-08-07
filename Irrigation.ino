@@ -9,7 +9,10 @@
 
 char ssid[] = "";  //  your network SSID (name)
 char pass[] = "";       // your network password
-const int c_no_of_valves = 5;
+const int c_no_of_valves = 5; // number of valves. If you change this number, make sure to also change the variables sw and pins accordingly
+int sw[5] = {0,0,0,0,0};
+int pins[5] = {2, 3, 5, 6, 8};
+
 #define MAX_CMD_LENGTH   30
 
 int status = WL_IDLE_STATUS;
@@ -24,10 +27,7 @@ WiFiServer server = WiFiServer(23);
 
 unsigned int localPort = 8888;  // local port to listen for UDP packets
 
-String cmds[10]; 
-int sw[5] = {0,0,0,0,0};
-int pins[5] = {2, 3, 5, 6, 8};
-
+String cmds[10]; // this contains the switch commands. Not the most elegant way, but it's on the list of things to change.
 String logstr;
 
 WiFiClient client;
@@ -41,7 +41,7 @@ void setup()
   wdt_disable();  // disable the watchdog immediately in setup. Otherwise we end up in an endless re-boot loop.
   Serial.begin(9600);
   
-  // check for the presence of the shield:
+  // check for the presence of the WiFi shield:
   if (WiFi.status() == WL_NO_SHIELD) {
     // don't continue:
     while(true);
@@ -51,9 +51,6 @@ void setup()
   // attempt to connect to Wifi network:
   while ( status != WL_CONNECTED) { 
     status = WiFi.begin(ssid, pass);
-
-    // wait 10 seconds for connection:
-    // delay(10000);
   }
 
   Udp.begin(localPort);
@@ -66,6 +63,9 @@ void setup()
     pinMode(pins[i], OUTPUT);
   }
   
+// set the initial command strings
+// the format is switch, seven days of week, start time HH:MM, end time HH:MM
+
   cmds[0] = "0:0000000:00:00:00:00";
   cmds[1] = "0:0000011:21:00:21:15";
   cmds[2] = "1:0000011:21:15:21:30";
