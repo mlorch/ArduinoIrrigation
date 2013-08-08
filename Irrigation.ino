@@ -1,3 +1,4 @@
+
 /* Irrigation Control System with 5 valves
  partially based on the Arduino NTP sample code and the Arduino Telnet sample code
 */
@@ -77,7 +78,7 @@ void loop()
   if (WiFi.status() != WL_CONNECTED) {
     while(true); // go into an endless loop when WIFI is not connected, this should reset the Arduino through the watchdog
   }
-  if (server.status() == 0) {
+  if (server.status() != 116) {
     while (true);
   }
   
@@ -103,7 +104,7 @@ void loop()
     int t_checkdmto;
     
     for (int i=0; i<10 ; i++) {
-      if (bitRead(cmd_weekday[i], wd) == 1) {
+      if (bitRead(cmd_weekday[i], wd-1) == 1) {
           t_sw = cmd_valve[i];
           
           t_checkdmfrom = hour(cmd_timeOn[i])*60+minute(cmd_timeOn[i]);
@@ -165,7 +166,7 @@ time_t getNtpTime()
 {
   while (Udp.parsePacket() > 0) ; // discard any previously received packets
   sendNTPpacket(timeServer);
-  uint32_t beginWait = millis(); // this won't handle overflows correctly?
+  uint32_t beginWait = millis(); 
   while (millis() - beginWait < 1500) {    
     int size = Udp.parsePacket();
     if (size >= NTP_PACKET_SIZE) {
@@ -259,8 +260,8 @@ void parseCommand() {
         char t_c = cmd.charAt(4); // the position/index to be written to
         if (t_c>='0' and t_c<='9') { // just make sure it is within boundaries
            cmd_valve[t_c-48] = cmd.charAt(6)-48;          
-           for (int j=1;j<8;j++) {
-             bitWrite(cmd_weekday[t_c-48], j, cmd.charAt(15-j)-48);
+           for (int j=0;j<7;j++) {
+             bitWrite(cmd_weekday[t_c-48], j, cmd.charAt(14-j)-48);
            }
            TimeElements tm;
            tm.Second = 0;
@@ -357,19 +358,27 @@ void parseCommand() {
     for (int i=0;i<10;i++) {
       server.print(cmd_valve[i]);
       server.print(":");
-      for (int j=1;j<8;j++) {
+      for (int j=0;j<7;j++) {
+        wdt_reset(); // since the output takes a while ensure the watchdog does not reset
         server.print(bitRead(cmd_weekday[i],j));
       }
       server.print(":");
-      server.print(hour(cmd_timeOn[i]));
+      printDigits(hour(cmd_timeOn[i]));
       server.print(":");
-      server.print(minute(cmd_timeOn[i]));
+      printDigits(minute(cmd_timeOn[i]<10));
       server.print(":");
-      server.print(hour(cmd_timeOff[i]));
+      printDigits(hour(cmd_timeOff[i]));
       server.print(":");
-      server.println(minute(cmd_timeOff[i]));
+      printDigits(minute(cmd_timeOff[i]));
+      server.println();
     }
   }
   cmd = "";
   server.print(">");
+}
+
+void printDigits(int digits){
+  if(digits < 10)
+    server.print('0');
+  server.print(digits);
 }
